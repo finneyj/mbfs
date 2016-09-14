@@ -166,6 +166,59 @@ void append_test(char *name, int size, int terminate = 1)
 }
 
 
+void incremental_append_test(char *name, int size, int terminate = 1)
+{
+	uint8_t buf[10000];
+	int fd;
+
+	char c = '0';
+
+	for (int i = 0; i < size; i++)
+	{
+		buf[i] = c++;
+		if (c > '9')
+			c = '0';
+	}
+
+	if (terminate)
+		buf[size - 1] = 0;
+
+	fd = mbfs.open(name, MB_WRITE | MB_APPEND);
+
+	for (int i = 0; i < size; i++)
+		mbfs.write(fd, &buf[i], 1);
+	mbfs.close(fd);
+}
+
+void incremental_seek_test(char *name, int offset, int size, int terminate = 1)
+{
+	uint8_t buf[10000];
+	int fd;
+
+	char c = '0';
+
+	for (int i = 0; i < size; i++)
+	{
+		buf[i] = c++;
+		if (c > '9')
+			c = '0';
+	}
+
+	if (terminate)
+		buf[size - 1] = 0;
+
+	fd = mbfs.open(name, MB_WRITE | MB_APPEND);
+
+	int ret = mbfs.seek(fd, offset, MB_SEEK_SET);
+
+	for (int i = 0; i < size; i++)
+		mbfs.write(fd, &buf[i], 1);
+
+	mbfs.close(fd);
+}
+
+
+
 void write_delete_test()
 {
 	char *message = "Hello World!";
@@ -201,22 +254,13 @@ int main()
 	//mbfs.remove("test8");
 
 	// Fill the file system. Leave only two block unallocated.
-	write_test("poop", 256, 1);
-	for (int i = 0; i < 154; i++)
-		append_test("poop", 256, 0);
+	write_test("poop", 32, 0);
 
-	write_test("file1", 200, 1);
-	write_test("file2", 200, 1);
+	//incremental_append_test("poop", 30, 1);
+	
+	incremental_seek_test("poop", 10, 30, 1);
 
-	mbfs.debugFAT();
-	mbfs.debugRootDirectory();
-
-	mbfs.remove("file1");
-
-	mbfs.debugFAT();
-	mbfs.debugRootDirectory();
-
-	write_test("file3", 200, 1);
+	print_file("poop");
 
 	mbfs.debugFAT();
 	mbfs.debugRootDirectory();

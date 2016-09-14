@@ -8,6 +8,7 @@
 
 #define PAGE_SIZE			1024
 #define MBFS_BLOCK_SIZE		256
+#define MBFS_CACHE_SIZE		0
 #define MBFS_PAGES			40
 
 #endif

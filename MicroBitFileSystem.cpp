@@ -851,6 +851,7 @@ int MicroBitFileSystem::open(char const * filename, uint32_t flags)
 	file->length = dirent->flags == MBFS_DIRECTORY_ENTRY_NEW ? 0 : dirent->length;
 	file->dirent = dirent;
 	file->directory = directory;
+	file->cacheLength = 0;
 
 	// Add the file descriptor to the chain of open files.
 	file->next = openFiles;
@@ -894,6 +895,9 @@ int MicroBitFileSystem::close(int fd)
 	// Ensure the file is open.
     if(file == NULL)
 		return NULL;
+
+	// Flush any data in the writeback cache.
+	writeBack(file);
 
 	// If the file has changed size, create an updated directory entry for the file, reflecting it's new length.
 	if (file->dirent->length != file->length)
@@ -963,6 +967,9 @@ int MicroBitFileSystem::seek(int fd, int offset, uint8_t flags)
 	if (file == NULL)
 		return MICROBIT_INVALID_PARAMETER;
 	
+	// Flush any data in the writeback cache.
+	writeBack(file);
+
 	position = file->seek;
 
     if(flags == MB_SEEK_SET)
@@ -974,7 +981,7 @@ int MicroBitFileSystem::seek(int fd, int offset, uint8_t flags)
 	if (flags == MB_SEEK_CUR)
 		position = file->seek + offset;
 	
-	if (position < 0 || position > file->length - file->seek)
+	if (position < 0 || position > file->length)
         return MICROBIT_INVALID_PARAMETER;
 
 	file->seek = position;
@@ -1026,6 +1033,9 @@ int MicroBitFileSystem::read(int fd, uint8_t* buffer, int size)
 	if (file == NULL || buffer == NULL || size == 0)
 		return MICROBIT_INVALID_PARAMETER;
 
+	// Flush any data in the writeback cache before we change the seek pointer.
+	writeBack(file);
+
 	// Validate the read length.
 	size = min(size, file->length - file->seek);
 
@@ -1070,34 +1080,33 @@ int MicroBitFileSystem::read(int fd, uint8_t* buffer, int size)
 }
 
 /**
-  * Write data to the file.
-  *
-  * Write from buffer, len bytes to the current seek position.
-  * On each invocation to write, the seek position of the file handle
-  * is incremented atomically, by the number of bytes returned.
-  *
-  * The cached filesize in the FD is updated on this call. Also, the
-  * FT file size is updated only if a new page(s) has been written too,
-  * to reduce the number of FT writes.
-  *
-  * @param fd File handle
-  * @param buffer the buffer from which to write data
-  * @param len number of bytes to write
-  * @return number of bytes written on success, MICROBIT_NO_RESOURCES if data did
-  *         not get written to flash or the file system has not been initialised,
-  *         or this file was not opened with the MB_WRITE flag set, MICROBIT_INVALID_PARAMETER
-  *         if the given file handle is invalid.
-  *
-  * @code
-  * MicroBitFileSystem f();
-  * int fd = f.open("test.txt", MB_WRITE);
-  * if(f.write(fd, "hello!", 7) != 7)
-  *    print("error writing");
-  * @endcode
-  */
-int MicroBitFileSystem::write(int fd, uint8_t* buffer, int size)
+* Flush a given file's cache back to FLASH memory.
+*
+* @param file File descriptor to flush.
+* @return The number of bytes written.
+* 
+*/
+int MicroBitFileSystem::writeBack(FileDescriptor *file)
 {
-	FileDescriptor *file;
+	if (file->cacheLength)
+	{
+		int r = writeBuffer(file, file->cache, file->cacheLength);
+		file->cacheLength = 0;
+		return r;
+	}
+
+	return 0;
+}
+
+/**
+* Write a given buffer to the file provided.
+*
+* @param file FileDescriptor of the file to write
+* @param buffer The start of the buffer to write
+* @param length The number of bytes to write
+*/
+int MicroBitFileSystem::writeBuffer(FileDescriptor *file, uint8_t *buffer, int size)
+{
 	uint16_t block, newBlock;
 	uint8_t *readPointer;
 	uint8_t *writePointer;
@@ -1106,16 +1115,6 @@ int MicroBitFileSystem::write(int fd, uint8_t* buffer, int size)
 	uint32_t position = 0;
 	int bytesCopied = 0;
 	int segmentLength;
-
-	// Protect against accidental re-initialisation
-	if ((status & MBFS_STATUS_INITIALISED) == 0)
-		return MICROBIT_NOT_SUPPORTED;
-
-	// Ensure the file is open.
-	file = getFileDescriptor(fd);
-
-	if (file == NULL || buffer == NULL || size == 0)
-		return MICROBIT_INVALID_PARAMETER;
 
 	// Find the read position.
 	block = file->dirent->first_block;
@@ -1166,6 +1165,77 @@ int MicroBitFileSystem::write(int fd, uint8_t* buffer, int size)
 	file->seek += bytesCopied;
 
 	return bytesCopied;
+}
+
+
+/**
+  * Write data to the file.
+  *
+  * Write from buffer, len bytes to the current seek position.
+  * On each invocation to write, the seek position of the file handle
+  * is incremented atomically, by the number of bytes returned.
+  *
+  * The cached filesize in the FD is updated on this call. Also, the
+  * FT file size is updated only if a new page(s) has been written too,
+  * to reduce the number of FT writes.
+  *
+  * @param fd File handle
+  * @param buffer the buffer from which to write data
+  * @param len number of bytes to write
+  * @return number of bytes written on success, MICROBIT_NO_RESOURCES if data did
+  *         not get written to flash or the file system has not been initialised,
+  *         or this file was not opened with the MB_WRITE flag set, MICROBIT_INVALID_PARAMETER
+  *         if the given file handle is invalid.
+  *
+  * @code
+  * MicroBitFileSystem f();
+  * int fd = f.open("test.txt", MB_WRITE);
+  * if(f.write(fd, "hello!", 7) != 7)
+  *    print("error writing");
+  * @endcode
+  */
+int MicroBitFileSystem::write(int fd, uint8_t* buffer, int size)
+{
+	FileDescriptor *file;
+	int bytesCopied = 0;
+	int segmentSize;
+
+	// Protect against accidental re-initialisation
+	if ((status & MBFS_STATUS_INITIALISED) == 0)
+		return MICROBIT_NOT_SUPPORTED;
+
+	// Ensure the file is open.
+	file = getFileDescriptor(fd);
+
+	if (file == NULL || buffer == NULL || size == 0)
+		return MICROBIT_INVALID_PARAMETER;
+
+	// Determine how to handle the write. If the buffer size is less than our cache size, 
+	// write the data via the cache. Otherwise, a direct write through is likely more efficient.
+	// This may take a few iterations if the cache is already quite full.
+	if (size < MBFS_CACHE_SIZE)
+	{
+		while (bytesCopied < size)
+		{
+			segmentSize = min(size, MBFS_CACHE_SIZE - file->cacheLength);
+			memcpy(&file->cache[file->cacheLength], buffer, segmentSize);
+
+			file->cacheLength += segmentSize;
+			bytesCopied += segmentSize;
+			
+			if (file->cacheLength == MBFS_CACHE_SIZE)
+				writeBack(file);
+
+
+		}
+
+		return bytesCopied;
+	}
+
+	// If we have a relatively large block, then write it directly (
+	writeBack(file);
+
+	return writeBuffer(file, buffer, size);
 }
 
 /**

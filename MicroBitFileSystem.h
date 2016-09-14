@@ -84,6 +84,10 @@ struct FileDescriptor
 
 	// We maintain a chain of open file descriptors. Reference to the next FileDescriptor in the chain.
 	FileDescriptor *next;
+
+	// Optional writeback cache, to minimise FLASH write operations at the expense of RAM.
+	uint16_t cacheLength;
+	uint8_t cache[MBFS_CACHE_SIZE];
 };
 
 /**
@@ -285,6 +289,25 @@ class MicroBitFileSystem
 	*/
 	int format();
 
+	/**
+	* Flush a given file's cache back to FLASH memory.
+	*
+	* @param file File descriptor to flush.
+	* @return The number of bytes written.
+	*
+	*/
+	int writeBack(FileDescriptor *file);
+
+	/**
+	  * Write a given buffer to the file provided.
+	  * 
+	  * @param file FileDescriptor of the file to write
+	  * @param buffer The start of the buffer to write
+	  * @param length The number of bytes to write
+	  * @return The number of bytes written.
+	  */
+	int writeBuffer(FileDescriptor *file, uint8_t* buffer, int length);
+
     public:
 
     static MicroBitFileSystem *defaultFileSystem;
@@ -374,7 +397,7 @@ class MicroBitFileSystem
     /**
       * Write data to the file.
       *
-      * Write from buffer, len bytes to the current seek position.
+      * Write from buffer, length bytes to the current seek position.
       * On each invocation to write, the seek position of the file handle
       * is incremented atomically, by the number of bytes returned.
       *
@@ -384,7 +407,7 @@ class MicroBitFileSystem
       *
       * @param fd File handle
       * @param buffer the buffer from which to write data
-      * @param len number of bytes to write
+      * @param length number of bytes to write
       * @return number of bytes written on success, MICROBIT_NO_RESOURCES if data did
       *         not get written to flash or the file system has not been initialised,
       *         or this file was not opened with the MB_WRITE flag set, MICROBIT_INVALID_PARAMETER
@@ -397,7 +420,7 @@ class MicroBitFileSystem
       *    print("error writing");
       * @endcode
       */
-    int write(int fd, uint8_t* buffer, int len);
+    int write(int fd, uint8_t* buffer, int length);
 
     /**
       * Read data from the file.
